@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import bz2
+import json
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
-from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import mwparserfromhell
@@ -27,6 +29,20 @@ class ExtractionResult:
     redirects_skipped: int
     non_articles_skipped: int
     short_documents_skipped: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractedPart:
+    input_path: Path
+    output_path: Path
+    result: ExtractionResult
+
+
+@dataclass(frozen=True, slots=True)
+class BatchExtractionResult:
+    parts: tuple[ExtractedPart, ...]
+    total: ExtractionResult
+    manifest_path: Path
 
 
 def clean_wikitext(source: str) -> str:
@@ -101,3 +117,69 @@ def extract_wikipedia(
         non_articles_skipped=non_articles_skipped,
         short_documents_skipped=short_documents_skipped,
     )
+
+
+def extracted_filename(input_path: Path) -> str:
+    name = input_path.name
+    for suffix in (".bz2", ".xml"):
+        name = name.removesuffix(suffix)
+    return f"{name}.txt.gz"
+
+
+def _extract_part(arguments: tuple[Path, Path, int]) -> ExtractedPart:
+    input_path, output_path, min_chars = arguments
+    return ExtractedPart(
+        input_path=input_path,
+        output_path=output_path,
+        result=extract_wikipedia(input_path, output_path, min_chars),
+    )
+
+
+def extract_wikipedia_parts(
+    input_paths: list[Path],
+    output_dir: Path,
+    *,
+    min_chars: int = 100,
+    workers: int = 1,
+) -> BatchExtractionResult:
+    """Extract multiple dump parts and write an auditable batch manifest."""
+    if not input_paths:
+        raise ValueError("at least one input part is required")
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    jobs = [
+        (input_path, output_dir / extracted_filename(input_path), min_chars)
+        for input_path in input_paths
+    ]
+
+    if workers == 1:
+        parts = tuple(_extract_part(job) for job in jobs)
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            parts = tuple(executor.map(_extract_part, jobs))
+
+    total = ExtractionResult(
+        pages_seen=sum(part.result.pages_seen for part in parts),
+        documents_written=sum(part.result.documents_written for part in parts),
+        redirects_skipped=sum(part.result.redirects_skipped for part in parts),
+        non_articles_skipped=sum(part.result.non_articles_skipped for part in parts),
+        short_documents_skipped=sum(part.result.short_documents_skipped for part in parts),
+    )
+    manifest_path = output_dir / "extraction-manifest.json"
+    manifest = {
+        "format_version": 1,
+        "min_chars": min_chars,
+        "workers": workers,
+        "parts": [
+            {
+                "input": str(part.input_path),
+                "output": str(part.output_path),
+                **asdict(part.result),
+            }
+            for part in parts
+        ],
+        "total": asdict(total),
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return BatchExtractionResult(parts, total, manifest_path)
