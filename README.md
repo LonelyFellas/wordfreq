@@ -15,6 +15,7 @@ English Wikipedia pipeline.
 - Plan and download selected multistream dump parts.
 - Resume interrupted downloads and verify file size and SHA-1.
 - Stream `.xml.bz2` files without loading an entire dump into memory.
+- Extract multiple dump parts concurrently and write a batch manifest.
 - Keep main-namespace articles and filter redirects, non-articles, and short pages.
 - Remove MediaWiki formatting, image links, and category links.
 - Write one cleaned document per line in a gzip-compressed corpus.
@@ -93,6 +94,19 @@ uv run freshfreq wikipedia extract \
 The output is UTF-8 text compressed with gzip. Each physical line represents one independent
 Wikipedia article, allowing document frequency to be calculated correctly.
 
+For multiple dump parts, pass all inputs and use an output directory. `--workers` controls how
+many parts are extracted concurrently:
+
+```bash
+uv run freshfreq wikipedia extract \
+  --input data/raw/wikipedia/20260701/*.xml*.bz2 \
+  --output data/processed/wikipedia-20260701 \
+  --workers 4
+```
+
+Each dump part produces a separate `.txt.gz` corpus. The output directory also contains
+`extraction-manifest.json` with per-part and total extraction counters.
+
 ### 4. Build a frequency dataset
 
 ```bash
@@ -132,6 +146,21 @@ term,occurrence_count,document_frequency,frequency_per_million,zipf_frequency
 
 The metadata sidecar records the source, snapshot, generation time, document count, token count,
 term count, n-gram configuration, counting backend, frequency unit, and Zipf definition.
+
+To build one global dataset from all extracted parts, provide multiple input files. They are
+processed as one logical corpus and merged through the same disk-backed counter:
+
+```bash
+uv run freshfreq count \
+  data/processed/wikipedia-20260701/*.txt.gz \
+  --output data/releases/wikipedia-20260701-frequency.csv \
+  --source wikipedia \
+  --snapshot 20260701 \
+  --work-dir data/work
+```
+
+The metadata sidecar records the ordered input list and input count, in addition to aggregate
+document and token totals.
 
 ### 5. Query a word
 
@@ -205,6 +234,8 @@ A Zipf difference of `1.0` represents an approximate tenfold difference in frequ
   enough disk space for all distinct terms.
 - Wikipedia represents encyclopedic written English, not everyday spoken English.
 - One dump part is a sample of a snapshot, not the complete English Wikipedia.
+- A complete snapshot requires substantial download, extracted-corpus, temporary database, and
+  release storage.
 - Additional domains must be counted independently before a defensible combined score is built.
 
 ## Project structure

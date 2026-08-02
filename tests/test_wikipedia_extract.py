@@ -5,7 +5,11 @@ import gzip
 from pathlib import Path
 
 from freshfreq.io import open_text
-from freshfreq.sources.wikipedia_extract import clean_wikitext, extract_wikipedia
+from freshfreq.sources.wikipedia_extract import (
+    clean_wikitext,
+    extract_wikipedia,
+    extract_wikipedia_parts,
+)
 from freshfreq.stats import count_documents
 
 SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -57,3 +61,21 @@ def test_extract_wikipedia_filters_redirects_and_namespaces(tmp_path: Path) -> N
     with open_text(output_path) as corpus:
         frequencies = {record.term: record for record in count_documents(corpus)}
     assert frequencies["frequency"].occurrence_count == 2
+
+
+def test_extract_wikipedia_parts_writes_outputs_and_manifest(tmp_path: Path) -> None:
+    inputs = [tmp_path / "part1.xml.bz2", tmp_path / "part2.xml.bz2"]
+    for input_path in inputs:
+        input_path.write_bytes(bz2.compress(SAMPLE_XML.encode()))
+
+    batch = extract_wikipedia_parts(inputs, tmp_path / "extracted", min_chars=10, workers=2)
+
+    assert len(batch.parts) == 2
+    assert batch.total.pages_seen == 6
+    assert batch.total.documents_written == 2
+    assert batch.manifest_path.is_file()
+    assert [part.output_path.name for part in batch.parts] == [
+        "part1.txt.gz",
+        "part2.txt.gz",
+    ]
+    assert all(part.output_path.is_file() for part in batch.parts)

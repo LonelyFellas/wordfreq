@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,11 +10,11 @@ from freshfreq.dataset import lookup_csv, metadata_path, read_metadata, result_a
 from freshfreq.external_count import count_documents_to_csv
 from freshfreq.io import open_text
 from freshfreq.sources.wikipedia import download_part, resolve_parts, write_manifest
-from freshfreq.sources.wikipedia_extract import extract_wikipedia
+from freshfreq.sources.wikipedia_extract import extract_wikipedia, extract_wikipedia_parts
 
 
 def count_command(
-    input_path: Path,
+    input_paths: Path | Sequence[Path],
     output_path: Path,
     source_name: str,
     snapshot: str | None,
@@ -21,10 +22,13 @@ def count_command(
     chunk_documents: int = 5_000,
     work_dir: Path | None = None,
 ) -> None:
+    paths = [input_paths] if isinstance(input_paths, Path) else list(input_paths)
+
     def documents():
-        with open_text(input_path) as source:
-            for line in source:
-                yield line.rstrip("\n")
+        for input_path in paths:
+            with open_text(input_path) as source:
+                for line in source:
+                    yield line.rstrip("\n")
 
     summary = count_documents_to_csv(
         documents(),
@@ -41,7 +45,9 @@ def count_command(
         "language": "en",
         "source": source_name,
         "snapshot": snapshot,
-        "input": str(input_path),
+        "input": str(paths[0]) if len(paths) == 1 else None,
+        "inputs": [str(path) for path in paths],
+        "input_count": len(paths),
         "generated_at": datetime.now(UTC).isoformat(),
         "document_count": summary.document_count,
         "token_count": summary.token_count,
@@ -63,7 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     count_parser = subparsers.add_parser("count", help="count tokens in line-delimited text")
-    count_parser.add_argument("input", type=Path, help="UTF-8 file; one document per line")
+    count_parser.add_argument(
+        "input",
+        type=Path,
+        nargs="+",
+        help="one or more UTF-8 files; one document per line",
+    )
     count_parser.add_argument("--output", "-o", type=Path, required=True)
     count_parser.add_argument("--source", default="custom", help="corpus source identifier")
     count_parser.add_argument("--snapshot", help="source snapshot, such as 20260701")
@@ -109,13 +120,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--output", type=Path, default=Path("data/raw/wikipedia"), help="download directory"
     )
     wikipedia_parser.add_argument(
-        "--input", type=Path, help="downloaded pages-articles .xml.bz2 part for extraction"
+        "--input",
+        type=Path,
+        nargs="+",
+        help="one or more downloaded pages-articles .xml.bz2 parts for extraction",
     )
     wikipedia_parser.add_argument(
         "--min-chars", type=int, default=100, help="minimum cleaned article length"
     )
     wikipedia_parser.add_argument(
         "--connections", type=int, default=4, help="parallel connections per downloaded file"
+    )
+    wikipedia_parser.add_argument(
+        "--workers", type=int, default=1, help="parallel extraction workers (default: 1)"
     )
     return parser
 
@@ -124,9 +141,10 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     if args.command == "count":
-        if not args.input.is_file():
+        missing = [path for path in args.input if not path.is_file()]
+        if missing:
             parser.error(
-                f"input file does not exist: {args.input}\n"
+                f"input file does not exist: {missing[0]}\n"
                 "Try the bundled example: examples/sample.txt"
             )
         if args.chunk_documents < 1:
@@ -165,19 +183,38 @@ def main() -> None:
             print(f"corpus tokens: {metadata.get('token_count', 0):,}")
     elif args.command == "wikipedia":
         if args.action == "extract":
-            if args.input is None or not args.input.is_file():
-                parser.error("wikipedia extract requires an existing --input .xml.bz2 file")
-            if args.output.suffix != ".gz":
-                parser.error("wikipedia extract --output must end in .gz")
+            if not args.input:
+                parser.error("wikipedia extract requires one or more --input .xml.bz2 files")
+            missing = [path for path in args.input if not path.is_file()]
+            if missing:
+                parser.error(f"input file does not exist: {missing[0]}")
             if args.min_chars < 1:
                 parser.error("--min-chars must be at least 1")
-            result = extract_wikipedia(args.input, args.output, args.min_chars)
+            if args.workers < 1:
+                parser.error("--workers must be at least 1")
+            if len(args.input) == 1 and args.output.suffix == ".gz":
+                result = extract_wikipedia(args.input[0], args.output, args.min_chars)
+                print(f"pages seen: {result.pages_seen:,}")
+                print(f"documents written: {result.documents_written:,}")
+                print(f"redirects skipped: {result.redirects_skipped:,}")
+                print(f"non-articles skipped: {result.non_articles_skipped:,}")
+                print(f"short documents skipped: {result.short_documents_skipped:,}")
+                print(f"saved: {args.output}")
+                return
+            batch = extract_wikipedia_parts(
+                args.input,
+                args.output,
+                min_chars=args.min_chars,
+                workers=args.workers,
+            )
+            result = batch.total
             print(f"pages seen: {result.pages_seen:,}")
             print(f"documents written: {result.documents_written:,}")
             print(f"redirects skipped: {result.redirects_skipped:,}")
             print(f"non-articles skipped: {result.non_articles_skipped:,}")
             print(f"short documents skipped: {result.short_documents_skipped:,}")
-            print(f"saved: {args.output}")
+            print(f"parts extracted: {len(batch.parts):,}")
+            print(f"manifest: {batch.manifest_path}")
             return
         if args.parts < 1:
             parser.error("--parts must be at least 1")

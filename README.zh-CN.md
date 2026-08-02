@@ -13,6 +13,7 @@
 - 规划并下载指定数量的 multistream 分块；
 - 支持断点续传，并校验文件大小和 SHA-1；
 - 流式读取 `.xml.bz2`，不需要把整个 dump 装入内存；
+- 支持并行提取多个 dump 分块，并生成批次 manifest；
 - 只保留主命名空间文章，过滤重定向、非正文和过短页面；
 - 清除 MediaWiki 格式、图片链接和分类链接；
 - 输出 gzip 压缩语料，每行一篇独立文章；
@@ -89,6 +90,19 @@ uv run freshfreq wikipedia extract \
 输出是 gzip 压缩的 UTF-8 文本，每一物理行代表一篇独立 Wikipedia 文章，从而可以正确
 计算文档覆盖数。
 
+处理多个 dump 分块时，可以一次传入所有文件，并将 `--output` 指向输出目录。
+`--workers` 控制同时提取的分块数量：
+
+```bash
+uv run freshfreq wikipedia extract \
+  --input data/raw/wikipedia/20260701/*.xml*.bz2 \
+  --output data/processed/wikipedia-20260701 \
+  --workers 4
+```
+
+每个 dump 分块会生成一份独立的 `.txt.gz` 语料。输出目录还会生成
+`extraction-manifest.json`，记录每个分块及全部分块的提取计数。
+
 ### 4. 构建词频数据集
 
 ```bash
@@ -127,6 +141,20 @@ term,occurrence_count,document_frequency,frequency_per_million,zipf_frequency
 
 元数据文件记录来源、快照、生成时间、文档数、token 数、词条数、n-gram 配置、统计后端、
 频率单位和 Zipf 定义。
+
+构建完整快照的全局数据集时，可以传入所有已提取文件。它们会被视为一个逻辑语料库，
+并通过相同的磁盘统计后端完成全局归并：
+
+```bash
+uv run freshfreq count \
+  data/processed/wikipedia-20260701/*.txt.gz \
+  --output data/releases/wikipedia-20260701-frequency.csv \
+  --source wikipedia \
+  --snapshot 20260701 \
+  --work-dir data/work
+```
+
+元数据除了保存汇总文档数和 token 数，还会记录有序输入文件列表和输入文件数量。
 
 ### 5. 查询单词
 
@@ -198,6 +226,7 @@ Zipf 相差 `1.0`，代表频率大约相差十倍。
 - 磁盘统计的内存受单个分片限制，但临时 SQLite 仍需足够空间保存所有不同词条；
 - Wikipedia 代表百科书面英语，不代表日常口语；
 - 一个 dump 分块只是某次快照的样本，不是完整英文 Wikipedia；
+- 完整快照需要充足的下载空间、提取语料空间、临时数据库空间和发布文件空间；
 - 在生成可信综合分数前，其他领域必须独立统计并保留来源结果。
 
 ## 项目结构
