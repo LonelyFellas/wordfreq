@@ -18,6 +18,7 @@ def count_command(
     output_path: Path,
     source_name: str,
     snapshot: str | None,
+    max_ngram: int,
 ) -> None:
     document_count = 0
 
@@ -28,7 +29,7 @@ def count_command(
                 document_count += 1
                 yield line.rstrip("\n")
 
-    records = count_documents(documents())
+    records = count_documents(documents(), max_ngram=max_ngram)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8", newline="") as destination:
@@ -62,8 +63,11 @@ def count_command(
         "input": str(input_path),
         "generated_at": datetime.now(UTC).isoformat(),
         "document_count": document_count,
-        "token_count": sum(record.occurrence_count for record in records),
+        "token_count": sum(
+            record.occurrence_count for record in records if " " not in record.term
+        ),
         "term_count": len(records),
+        "max_ngram": max_ngram,
         "frequency_unit": "per_million_tokens",
         "zipf_definition": "log10(occurrences_per_billion_tokens)",
     }
@@ -81,9 +85,17 @@ def build_parser() -> argparse.ArgumentParser:
     count_parser.add_argument("--output", "-o", type=Path, required=True)
     count_parser.add_argument("--source", default="custom", help="corpus source identifier")
     count_parser.add_argument("--snapshot", help="source snapshot, such as 20260701")
+    count_parser.add_argument(
+        "--max-ngram",
+        type=int,
+        choices=range(1, 4),
+        default=1,
+        metavar="N",
+        help="include contiguous n-grams up to N (1-3; default: 1)",
+    )
 
-    lookup_parser = subparsers.add_parser("lookup", help="look up one word in a frequency CSV")
-    lookup_parser.add_argument("term", help="one word; phrase lookup is not available yet")
+    lookup_parser = subparsers.add_parser("lookup", help="look up a word or phrase in a CSV")
+    lookup_parser.add_argument("term", help="word or contiguous phrase")
     lookup_parser.add_argument("--dataset", type=Path, required=True)
     lookup_parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
 
@@ -123,7 +135,7 @@ def main() -> None:
                 f"input file does not exist: {args.input}\n"
                 "Try the bundled example: examples/sample.txt"
             )
-        count_command(args.input, args.output, args.source, args.snapshot)
+        count_command(args.input, args.output, args.source, args.snapshot, args.max_ngram)
     elif args.command == "lookup":
         if not args.dataset.is_file():
             parser.error(f"dataset file does not exist: {args.dataset}")

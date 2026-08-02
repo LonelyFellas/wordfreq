@@ -16,10 +16,10 @@
 - 只保留主命名空间文章，过滤重定向、非正文和过短页面；
 - 清除 MediaWiki 格式、图片链接和分类链接；
 - 输出 gzip 压缩语料，每行一篇独立文章；
-- 统计表面词形的出现次数和跨文档覆盖数；
+- 统计 unigram、bigram、trigram 的出现次数和跨文档覆盖数；
 - 计算每百万 token 频率和 Zipf 词频；
 - 为每份词频 CSV 生成版本化 JSON 元数据；
-- 以文本或 JSON 格式查询单词。
+- 以文本或 JSON 格式查询单词或短语。
 
 ## 环境要求
 
@@ -128,6 +128,24 @@ uv run freshfreq lookup actually \
   --json
 ```
 
+### 统计和查询短语
+
+默认仍然只统计 unigram。使用 `--max-ngram 2` 同时统计单词与二元短语；使用
+`--max-ngram 3` 还会加入三元短语：
+
+```bash
+uv run freshfreq count examples/sample.txt \
+  --output data/processed/sample-ngrams.csv \
+  --source custom \
+  --max-ngram 3
+
+uv run freshfreq lookup "trade and craft" \
+  --dataset data/processed/sample-ngrams.csv
+```
+
+n-gram 是同一篇文档内连续出现并经过归一化的 token。短语频率仍以整个语料的 token 总数
+作为分母，因此单词和短语的 Zipf 值可以横向比较。所选最大 n-gram 长度会写入元数据文件。
+
 ## 统计自定义语料
 
 输入必须是 UTF-8 文本，每行代表一篇独立文档：
@@ -160,8 +178,8 @@ Zipf 相差 `1.0`，代表频率大约相差十倍。
 ## 当前限制
 
 - 当前只统计英文表面词形，不会把不同变形合并为 lemma；
-- CSV 当前只包含 unigram；
-- 词组查询会被拒绝，不会根据组成单词进行不可靠估算；
+- n-gram 目前仅支持最多三个 token 的连续短语；
+- bigram 和 trigram 会显著增加内存与输出空间需求；
 - Wikipedia 代表百科书面英语，不代表日常口语；
 - 一个 dump 分块只是某次快照的样本，不是完整英文 Wikipedia；
 - 在生成可信综合分数前，其他领域必须独立统计并保留来源结果。

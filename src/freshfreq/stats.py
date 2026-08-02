@@ -17,16 +17,29 @@ class FrequencyRecord:
     zipf_frequency: float
 
 
-def count_documents(documents: Iterable[str]) -> list[FrequencyRecord]:
-    """Count surface forms while retaining cross-document dispersion."""
+def iter_ngrams(tokens: list[str], max_ngram: int) -> Iterable[str]:
+    """Yield contiguous n-grams, starting with unigrams."""
+    for size in range(1, max_ngram + 1):
+        for start in range(len(tokens) - size + 1):
+            yield " ".join(tokens[start : start + size])
+
+
+def count_documents(
+    documents: Iterable[str], max_ngram: int = 1
+) -> list[FrequencyRecord]:
+    """Count contiguous surface-form n-grams and document dispersion."""
+    if max_ngram < 1:
+        raise ValueError("max_ngram must be at least 1")
+
     occurrences: Counter[str] = Counter()
     document_frequency: Counter[str] = Counter()
     total_tokens = 0
 
     for document in documents:
         tokens = tokenize(document)
-        occurrences.update(tokens)
-        document_frequency.update(set(tokens))
+        terms = list(iter_ngrams(tokens, max_ngram))
+        occurrences.update(terms)
+        document_frequency.update(set(terms))
         total_tokens += len(tokens)
 
     if total_tokens == 0:
