@@ -45,6 +45,44 @@ uv run ruff check .
 
 ## Wikipedia 完整流程
 
+### 一条命令完成可复现构建
+
+`build` 会串联快照发现、校验下载、并行提取、磁盘统计、元数据以及构建 manifest：
+
+```bash
+uv run freshfreq wikipedia build \
+  --snapshot 20260701 \
+  --parts all \
+  --connections 4 \
+  --workers 4 \
+  --data-dir data
+```
+
+在不写入文件的情况下，预览所选分块、下载大小、提取大小估算、峰值磁盘估算和发布路径：
+
+```bash
+uv run freshfreq wikipedia build \
+  --snapshot 20260701 \
+  --parts all \
+  --dry-run
+```
+
+构建支持文件边界级别的恢复。已经验证的下载文件、原子完成的提取文件，以及同时具有元数据
+sidecar 的词频 CSV 会被复用。重新执行同一命令时，会从第一个未完成阶段继续。发布目录中的
+`*.build-manifest.json` 会依次记录 downloading、extracting、counting 和 complete 状态。
+
+默认生成路径为：
+
+```text
+data/raw/wikipedia/<snapshot>/
+data/processed/wikipedia-<snapshot>/
+data/releases/wikipedia-<snapshot>-frequency.csv
+data/releases/wikipedia-<snapshot>-frequency.build-manifest.json
+```
+
+提取大小和峰值磁盘数字只是规划估算，不是硬性上限。不同快照和 n-gram 配置的压缩率、
+不同词条数量会变化，因此应保留额外可用空间。
+
 ### 1. 查看下载计划
 
 解析最新完成的快照并显示文件，但不执行下载：
@@ -227,6 +265,8 @@ Zipf 相差 `1.0`，代表频率大约相差十倍。
 - Wikipedia 代表百科书面英语，不代表日常口语；
 - 一个 dump 分块只是某次快照的样本，不是完整英文 Wikipedia；
 - 完整快照需要充足的下载空间、提取语料空间、临时数据库空间和发布文件空间；
+- 当前恢复粒度是文件和流水线阶段；如果单个提取任务中断，该压缩 XML 分块会重新提取，
+  不会从文件内部继续；
 - 在生成可信综合分数前，其他领域必须独立统计并保留来源结果。
 
 ## 项目结构

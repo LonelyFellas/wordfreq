@@ -87,7 +87,9 @@ def extract_wikipedia(
     short_documents_skipped = 0
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with bz2.open(input_path, mode="rb") as source, open_text(output_path, "wt") as output:
+    temporary_path = output_path.with_name(f"{output_path.name}.part{output_path.suffix}")
+    temporary_path.unlink(missing_ok=True)
+    with bz2.open(input_path, mode="rb") as source, open_text(temporary_path, "wt") as output:
         for _, element in ET.iterparse(source, events=("end",)):
             if not element.tag.endswith("}page") and element.tag != "page":
                 continue
@@ -109,6 +111,8 @@ def extract_wikipedia(
                     output.write("\n")
                     documents_written += 1
             element.clear()
+
+    temporary_path.replace(output_path)
 
     return ExtractionResult(
         pages_seen=pages_seen,
