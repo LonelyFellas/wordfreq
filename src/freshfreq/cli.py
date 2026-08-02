@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 from freshfreq.dataset import lookup_csv, metadata_path, read_metadata, result_as_dict
+from freshfreq.external_count import count_documents_to_csv
 from freshfreq.io import open_text
 from freshfreq.sources.wikipedia import download_part, resolve_parts, write_manifest
 from freshfreq.sources.wikipedia_extract import extract_wikipedia
-from freshfreq.stats import count_documents
 
 
 def count_command(
@@ -19,42 +18,24 @@ def count_command(
     source_name: str,
     snapshot: str | None,
     max_ngram: int,
+    chunk_documents: int = 5_000,
+    work_dir: Path | None = None,
 ) -> None:
-    document_count = 0
-
     def documents():
-        nonlocal document_count
         with open_text(input_path) as source:
             for line in source:
-                document_count += 1
                 yield line.rstrip("\n")
 
-    records = count_documents(documents(), max_ngram=max_ngram)
+    summary = count_documents_to_csv(
+        documents(),
+        output_path,
+        max_ngram=max_ngram,
+        chunk_documents=chunk_documents,
+        work_dir=work_dir,
+        on_chunk=lambda chunk, docs: print(f"merged chunk {chunk:,}: {docs:,} documents"),
+    )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8", newline="") as destination:
-        writer = csv.writer(destination)
-        writer.writerow(
-            [
-                "term",
-                "occurrence_count",
-                "document_frequency",
-                "frequency_per_million",
-                "zipf_frequency",
-            ]
-        )
-        for record in records:
-            writer.writerow(
-                [
-                    record.term,
-                    record.occurrence_count,
-                    record.document_frequency,
-                    f"{record.frequency_per_million:.6f}",
-                    f"{record.zipf_frequency:.4f}",
-                ]
-            )
-
-    print(f"wrote {len(records):,} terms to {output_path}")
+    print(f"wrote {summary.term_count:,} terms to {output_path}")
     metadata = {
         "format_version": 1,
         "language": "en",
@@ -62,12 +43,13 @@ def count_command(
         "snapshot": snapshot,
         "input": str(input_path),
         "generated_at": datetime.now(UTC).isoformat(),
-        "document_count": document_count,
-        "token_count": sum(
-            record.occurrence_count for record in records if " " not in record.term
-        ),
-        "term_count": len(records),
+        "document_count": summary.document_count,
+        "token_count": summary.token_count,
+        "term_count": summary.term_count,
         "max_ngram": max_ngram,
+        "count_backend": "sqlite_chunked",
+        "chunk_documents": chunk_documents,
+        "chunk_count": summary.chunk_count,
         "frequency_unit": "per_million_tokens",
         "zipf_definition": "log10(occurrences_per_billion_tokens)",
     }
@@ -92,6 +74,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         metavar="N",
         help="include contiguous n-grams up to N (1-3; default: 1)",
+    )
+    count_parser.add_argument(
+        "--chunk-documents",
+        type=int,
+        default=5_000,
+        metavar="N",
+        help="documents per in-memory chunk (default: 5000)",
+    )
+    count_parser.add_argument(
+        "--work-dir",
+        type=Path,
+        help="directory for temporary on-disk counts (default: system temp)",
     )
 
     lookup_parser = subparsers.add_parser("lookup", help="look up a word or phrase in a CSV")
@@ -135,7 +129,17 @@ def main() -> None:
                 f"input file does not exist: {args.input}\n"
                 "Try the bundled example: examples/sample.txt"
             )
-        count_command(args.input, args.output, args.source, args.snapshot, args.max_ngram)
+        if args.chunk_documents < 1:
+            parser.error("--chunk-documents must be at least 1")
+        count_command(
+            args.input,
+            args.output,
+            args.source,
+            args.snapshot,
+            args.max_ngram,
+            args.chunk_documents,
+            args.work_dir,
+        )
     elif args.command == "lookup":
         if not args.dataset.is_file():
             parser.error(f"dataset file does not exist: {args.dataset}")

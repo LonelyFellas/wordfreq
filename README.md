@@ -19,6 +19,7 @@ English Wikipedia pipeline.
 - Remove MediaWiki formatting, image links, and category links.
 - Write one cleaned document per line in a gzip-compressed corpus.
 - Count unigram, bigram, and trigram occurrences and cross-document frequency.
+- Merge bounded in-memory chunks into a temporary SQLite database for large corpora.
 - Calculate frequency per million tokens and Zipf frequency.
 - Produce a versioned JSON metadata sidecar for every frequency CSV.
 - Query a word or phrase in text or JSON format.
@@ -102,6 +103,20 @@ uv run freshfreq count \
   --snapshot 20260701
 ```
 
+Counting is disk-backed by default. Documents are processed in batches of 5,000 and merged into
+a temporary SQLite database before the final CSV is streamed. Change the memory/disk tradeoff or
+place temporary files on a larger volume when necessary:
+
+```bash
+uv run freshfreq count corpus.txt.gz \
+  --output data/processed/frequency.csv \
+  --chunk-documents 2000 \
+  --work-dir data/work
+```
+
+A smaller chunk uses less peak memory but performs more database merges. Temporary counting data
+is deleted after a successful or failed run; only the final CSV and metadata sidecar remain.
+
 This produces two files:
 
 ```text
@@ -116,7 +131,7 @@ term,occurrence_count,document_frequency,frequency_per_million,zipf_frequency
 ```
 
 The metadata sidecar records the source, snapshot, generation time, document count, token count,
-term count, frequency unit, and Zipf definition.
+term count, n-gram configuration, counting backend, frequency unit, and Zipf definition.
 
 ### 5. Query a word
 
@@ -186,6 +201,8 @@ A Zipf difference of `1.0` represents an approximate tenfold difference in frequ
 - Only English surface forms are counted; inflections are not merged into lemmas.
 - N-grams are limited to contiguous phrases of at most three tokens.
 - Counting bigrams and trigrams requires substantially more memory and output space.
+- Disk-backed counting is bounded by each chunk, but the temporary SQLite database still needs
+  enough disk space for all distinct terms.
 - Wikipedia represents encyclopedic written English, not everyday spoken English.
 - One dump part is a sample of a snapshot, not the complete English Wikipedia.
 - Additional domains must be counted independently before a defensible combined score is built.

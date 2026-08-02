@@ -17,6 +17,7 @@
 - 清除 MediaWiki 格式、图片链接和分类链接；
 - 输出 gzip 压缩语料，每行一篇独立文章；
 - 统计 unigram、bigram、trigram 的出现次数和跨文档覆盖数；
+- 将有上限的内存分片归并到临时 SQLite，以支持大型语料；
 - 计算每百万 token 频率和 Zipf 词频；
 - 为每份词频 CSV 生成版本化 JSON 元数据；
 - 以文本或 JSON 格式查询单词或短语。
@@ -98,6 +99,19 @@ uv run freshfreq count \
   --snapshot 20260701
 ```
 
+统计默认使用磁盘后端。程序每次在内存处理 5,000 篇文档，然后归并到临时 SQLite，最后
+流式导出 CSV。需要调整内存与磁盘的取舍，或把临时文件放到空间更大的磁盘时，可以使用：
+
+```bash
+uv run freshfreq count corpus.txt.gz \
+  --output data/processed/frequency.csv \
+  --chunk-documents 2000 \
+  --work-dir data/work
+```
+
+分片越小，峰值内存越低，但数据库归并次数越多。运行成功或失败后都会删除临时统计数据，
+最终只保留 CSV 和元数据文件。
+
 该命令生成两个文件：
 
 ```text
@@ -111,7 +125,8 @@ CSV 字段：
 term,occurrence_count,document_frequency,frequency_per_million,zipf_frequency
 ```
 
-元数据文件记录来源、快照、生成时间、文档数、token 数、词条数、频率单位和 Zipf 定义。
+元数据文件记录来源、快照、生成时间、文档数、token 数、词条数、n-gram 配置、统计后端、
+频率单位和 Zipf 定义。
 
 ### 5. 查询单词
 
@@ -180,6 +195,7 @@ Zipf 相差 `1.0`，代表频率大约相差十倍。
 - 当前只统计英文表面词形，不会把不同变形合并为 lemma；
 - n-gram 目前仅支持最多三个 token 的连续短语；
 - bigram 和 trigram 会显著增加内存与输出空间需求；
+- 磁盘统计的内存受单个分片限制，但临时 SQLite 仍需足够空间保存所有不同词条；
 - Wikipedia 代表百科书面英语，不代表日常口语；
 - 一个 dump 分块只是某次快照的样本，不是完整英文 Wikipedia；
 - 在生成可信综合分数前，其他领域必须独立统计并保留来源结果。
