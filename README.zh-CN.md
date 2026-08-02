@@ -83,6 +83,40 @@ data/releases/wikipedia-<snapshot>-frequency.build-manifest.json
 提取大小和峰值磁盘数字只是规划估算，不是硬性上限。不同快照和 n-gram 配置的压缩率、
 不同词条数量会变化，因此应保留额外可用空间。
 
+### 低磁盘流式构建
+
+流式模式会把每个已校验 dump 分块直接解析并累计到持久化 SQLite，不生成提取后的
+`.txt.gz` 语料。使用 `--delete-raw` 时，只有数据库事务和 checkpoint 提交成功后，才会
+删除对应原始分块：
+
+```bash
+uv run freshfreq wikipedia build \
+  --snapshot 20260701 \
+  --parts all \
+  --connections 4 \
+  --streaming \
+  --delete-raw \
+  --max-ngram 1
+```
+
+持久化数据库位于 `data/work/wikipedia-<snapshot>-counts.sqlite3`。分块完成记录和词频累计
+处于同一个事务中。如果解析失败或进程中断，事务会回滚、原始文件会保留，重新运行时不会
+重复累计。再次构建时，文件名和 SHA-1 仍然匹配的 checkpoint 会被跳过。
+
+流式 dry-run 会显示独立的磁盘估算：
+
+```bash
+uv run freshfreq wikipedia build \
+  --snapshot 20260701 \
+  --parts all \
+  --streaming \
+  --delete-raw \
+  --dry-run
+```
+
+磁盘有限时，完整快照应使用 unigram。bigram 和 trigram 数据库可能大出数倍。流式模式
+节省空间，但删除原始和提取语料后，如果以后修改分词或清洗规则，就需要重新下载 dump。
+
 ### 1. 查看下载计划
 
 解析最新完成的快照并显示文件，但不执行下载：
@@ -267,6 +301,7 @@ Zipf 相差 `1.0`，代表频率大约相差十倍。
 - 完整快照需要充足的下载空间、提取语料空间、临时数据库空间和发布文件空间；
 - 当前恢复粒度是文件和流水线阶段；如果单个提取任务中断，该压缩 XML 分块会重新提取，
   不会从文件内部继续；
+- 流式 checkpoint 以 dump 分块为单位；中断时，当前分块内尚未提交的工作会回滚并重做；
 - 在生成可信综合分数前，其他领域必须独立统计并保留来源结果。
 
 ## 项目结构
@@ -276,6 +311,7 @@ configs/          数据集和发布配置
 data/raw/         下载的原始语料，不提交 Git
 data/processed/   提取语料和统计结果，不提交 Git
 data/releases/    可发布的数据产物，不提交 Git
+data/work/        持久化流式数据库和临时统计，不提交 Git
 examples/         本地微型示例
 src/freshfreq/    CLI、数据源、提取、分词和统计实现
 tests/            自动化测试

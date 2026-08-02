@@ -8,7 +8,7 @@ __pycache__/
 data/raw/*
 data/processed/*
 data/releases/*
+data/work/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/releases/.gitkeep
-

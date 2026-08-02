@@ -22,6 +22,13 @@ class WikipediaBuildPlan:
     estimated_extracted_bytes: int
     estimated_peak_bytes: int
 
+    def estimated_streaming_peak_bytes(self, max_ngram: int) -> int:
+        """Return a conservative heuristic for the persistent DB and one raw part."""
+        largest_part = max((part.size for part in self.parts), default=0)
+        unigram_database = max(10_000_000_000, int(self.download_bytes * 0.4))
+        ngram_multiplier = {1: 1.0, 2: 2.5, 3: 6.0}[max_ngram]
+        return largest_part * 2 + int(unigram_database * ngram_multiplier)
+
 
 def create_build_plan(
     snapshot: str,
@@ -53,6 +60,7 @@ def write_build_manifest(
     stage: str,
     downloaded: list[Path],
     extracted: list[Path],
+    details: dict[str, object] | None = None,
 ) -> Path:
     manifest_path = plan.output_path.with_suffix(".build-manifest.json")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,6 +81,8 @@ def write_build_manifest(
         "extracted": [str(path) for path in extracted],
         "frequency_metadata": str(metadata_path(plan.output_path)),
     }
+    if details:
+        payload.update(details)
     temporary = manifest_path.with_suffix(manifest_path.suffix + ".part")
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     temporary.replace(manifest_path)
