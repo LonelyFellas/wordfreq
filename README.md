@@ -18,10 +18,10 @@ English Wikipedia pipeline.
 - Keep main-namespace articles and filter redirects, non-articles, and short pages.
 - Remove MediaWiki formatting, image links, and category links.
 - Write one cleaned document per line in a gzip-compressed corpus.
-- Count surface-form occurrences and cross-document frequency.
+- Count unigram, bigram, and trigram occurrences and cross-document frequency.
 - Calculate frequency per million tokens and Zipf frequency.
 - Produce a versioned JSON metadata sidecar for every frequency CSV.
-- Query a word in text or JSON format.
+- Query a word or phrase in text or JSON format.
 
 ## Requirements
 
@@ -133,6 +133,25 @@ uv run freshfreq lookup actually \
   --json
 ```
 
+### Count and query phrases
+
+Unigram counting remains the default. Use `--max-ngram 2` for words and bigrams, or
+`--max-ngram 3` to also include trigrams:
+
+```bash
+uv run freshfreq count examples/sample.txt \
+  --output data/processed/sample-ngrams.csv \
+  --source custom \
+  --max-ngram 3
+
+uv run freshfreq lookup "trade and craft" \
+  --dataset data/processed/sample-ngrams.csv
+```
+
+N-grams are contiguous normalized tokens within one document. Phrase frequency uses the total
+corpus token count as its denominator, so word and phrase Zipf values remain comparable. The
+selected maximum n-gram size is recorded in the metadata sidecar.
+
 ## Count a custom corpus
 
 Input must be UTF-8 text with one document per line:
@@ -165,8 +184,8 @@ A Zipf difference of `1.0` represents an approximate tenfold difference in frequ
 ## Current limitations
 
 - Only English surface forms are counted; inflections are not merged into lemmas.
-- The published CSV format currently contains unigrams only.
-- Phrase lookup is rejected instead of being estimated from component words.
+- N-grams are limited to contiguous phrases of at most three tokens.
+- Counting bigrams and trigrams requires substantially more memory and output space.
 - Wikipedia represents encyclopedic written English, not everyday spoken English.
 - One dump part is a sample of a snapshot, not the complete English Wikipedia.
 - Additional domains must be counted independently before a defensible combined score is built.

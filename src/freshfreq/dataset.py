@@ -31,9 +31,9 @@ def read_metadata(dataset_path: Path) -> dict[str, Any]:
 
 def lookup_csv(dataset_path: Path, query: str) -> LookupResult | None:
     tokens = tokenize(query)
-    if len(tokens) != 1 or tokens[0] != query.casefold().strip():
-        raise ValueError("lookup currently supports exactly one normalized word, not a phrase")
-    normalized = tokens[0]
+    if not tokens:
+        raise ValueError("lookup requires at least one English word")
+    normalized = " ".join(tokens)
 
     with dataset_path.open(encoding="utf-8", newline="") as source:
         for row in csv.DictReader(source):
