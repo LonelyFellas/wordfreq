@@ -18,6 +18,7 @@ from freshfreq.sources.wikipedia_build import (
     write_build_manifest,
 )
 from freshfreq.sources.wikipedia_extract import extract_wikipedia, extract_wikipedia_parts
+from freshfreq.sources.wikipedia_stream import stream_wikipedia_build
 
 
 def count_command(
@@ -180,6 +181,16 @@ def build_parser() -> argparse.ArgumentParser:
     wikipedia_parser.add_argument(
         "--dry-run", action="store_true", help="show a complete build plan without writing files"
     )
+    wikipedia_parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="count each dump part directly into a persistent SQLite database",
+    )
+    wikipedia_parser.add_argument(
+        "--delete-raw",
+        action="store_true",
+        help="delete each raw dump part after its streaming transaction commits",
+    )
     return parser
 
 
@@ -271,6 +282,8 @@ def main() -> None:
         if args.chunk_documents < 1:
             parser.error("--chunk-documents must be at least 1")
         if args.action == "build":
+            if args.delete_raw and not args.streaming:
+                parser.error("--delete-raw requires --streaming")
             plan = create_build_plan(
                 args.snapshot,
                 args.parts,
@@ -285,10 +298,39 @@ def main() -> None:
                 "estimated extracted: "
                 f"{plan.estimated_extracted_bytes / 1_000_000_000:.2f} GB"
             )
-            print(f"estimated peak disk: {plan.estimated_peak_bytes / 1_000_000_000:.2f} GB")
+            if args.streaming:
+                streaming_peak = plan.estimated_streaming_peak_bytes(args.max_ngram)
+                print(
+                    "estimated peak disk (streaming heuristic): "
+                    f"{streaming_peak / 1_000_000_000:.2f} GB"
+                )
+            else:
+                print(
+                    f"estimated peak disk: {plan.estimated_peak_bytes / 1_000_000_000:.2f} GB"
+                )
             print(f"release: {plan.output_path}")
+            if args.streaming:
+                print("mode: streaming (no extracted corpus files)")
+                print(f"delete raw after commit: {args.delete_raw}")
             if args.dry_run:
                 print("dry run: no files written")
+                return
+
+            if args.streaming:
+                summary = stream_wikipedia_build(
+                    plan,
+                    connections=args.connections,
+                    min_chars=args.min_chars,
+                    max_ngram=args.max_ngram,
+                    chunk_documents=args.chunk_documents,
+                    delete_raw=args.delete_raw,
+                )
+                print(f"parts completed: {summary.completed_parts:,}")
+                print(f"documents: {summary.document_count:,}")
+                print(f"tokens: {summary.token_count:,}")
+                print(f"terms: {summary.term_count:,}")
+                print(f"streaming database: {summary.database_path}")
+                print(f"build complete: {plan.output_path}")
                 return
 
             write_build_manifest(plan, stage="downloading", downloaded=[], extracted=[])

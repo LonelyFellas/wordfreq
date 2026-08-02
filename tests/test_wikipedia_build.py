@@ -32,6 +32,8 @@ def test_create_build_plan_resolves_paths_and_estimates_disk(
     assert plan.download_bytes == 300
     assert plan.estimated_extracted_bytes == 180
     assert plan.estimated_peak_bytes == 840
+    assert plan.estimated_streaming_peak_bytes(1) == 10_000_000_400
+    assert plan.estimated_streaming_peak_bytes(2) == 25_000_000_400
     assert plan.output_path == tmp_path / "releases/wikipedia-20260801-frequency.csv"
 
 

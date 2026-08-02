@@ -90,6 +90,43 @@ The extracted-size and peak-disk figures are planning estimates, not quotas. Kee
 free space because compression ratios and the number of distinct n-grams vary by snapshot and
 configuration.
 
+### Low-disk streaming build
+
+Streaming mode parses one verified dump part directly into a persistent SQLite counter. It does
+not create the extracted `.txt.gz` corpus. With `--delete-raw`, each raw part is deleted only
+after its database transaction and checkpoint commit:
+
+```bash
+uv run freshfreq wikipedia build \
+  --snapshot 20260701 \
+  --parts all \
+  --connections 4 \
+  --streaming \
+  --delete-raw \
+  --max-ngram 1
+```
+
+The persistent database is stored at
+`data/work/wikipedia-<snapshot>-counts.sqlite3`. A completed part is recorded in the same
+transaction as its counts. If parsing fails or the process is interrupted, the transaction rolls
+back, the raw file remains, and the part is retried without double counting. Re-running a build
+skips checkpoints whose filename and SHA-1 still match.
+
+The streaming dry-run shows a separate disk heuristic:
+
+```bash
+uv run freshfreq wikipedia build \
+  --snapshot 20260701 \
+  --parts all \
+  --streaming \
+  --delete-raw \
+  --dry-run
+```
+
+Use unigram mode for a full snapshot on limited storage. Bigram and trigram databases can be many
+times larger. Streaming saves disk, but removing raw and extracted corpora means a tokenizer or
+cleaning-rule change requires downloading the dump again.
+
 ### 1. Plan a download
 
 This resolves the latest completed snapshot and prints the selected files without downloading
@@ -281,6 +318,8 @@ A Zipf difference of `1.0` represents an approximate tenfold difference in frequ
   release storage.
 - Resume currently happens at file and pipeline-stage boundaries; an interrupted extraction part
   is restarted rather than resumed within the compressed XML stream.
+- Streaming checkpoints are per dump part; work inside the currently active part is rolled back
+  and restarted after interruption.
 - Additional domains must be counted independently before a defensible combined score is built.
 
 ## Project structure
@@ -290,6 +329,7 @@ configs/          Dataset and release configurations
 data/raw/         Downloaded source corpora; ignored by Git
 data/processed/   Extracted corpora and statistics; ignored by Git
 data/releases/    Publishable release artifacts; ignored by Git
+data/work/        Persistent streaming databases and temporary counts; ignored by Git
 examples/         Small local examples
 src/freshfreq/    CLI, source adapters, extraction, tokenization, and statistics
 tests/            Automated tests
