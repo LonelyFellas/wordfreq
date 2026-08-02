@@ -1,0 +1,8 @@
+{
+  "release": "2026.1",
+  "language": "en",
+  "tokenizer_version": "english-surface-v1",
+  "sources": [],
+  "notes": "Add only sources whose redistribution and derived-statistics terms have been reviewed."
+}
+

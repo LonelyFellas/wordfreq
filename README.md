@@ -19,11 +19,20 @@ uv run freshfreq --help
 uv run pytest
 ```
 
-统计文本文件（每行视为一篇独立文档）：
+运行项目自带的示例（每行视为一篇独立文档）：
 
 ```bash
-uv run freshfreq count sample.txt --output data/processed/sample.csv
+uv run freshfreq count examples/sample.txt --output data/processed/sample.csv
 ```
+
+查看结果：
+
+```bash
+column -s, -t data/processed/sample.csv
+```
+
+统计自己的语料时，将 `examples/sample.txt` 换成真实文件路径。输入必须是 UTF-8 文本，
+每行代表一篇独立文档；只有这样才能正确计算 `document_frequency`。
 
 输出字段：
 
@@ -40,8 +49,8 @@ data/processed/   中间统计，不提交 Git
 data/releases/    最终发布数据，不提交 Git
 src/freshfreq/    归一化、分词、统计、导出和 CLI
 tests/            自动化测试
+examples/         可直接运行的微型示例语料
 ```
 
 后续数据源应分别构建，例如 `wikipedia`、`common_crawl`、`news` 和 `spoken`。聚合之前
 必须保留来源、时间范围、总 token 数和总文档数。
-

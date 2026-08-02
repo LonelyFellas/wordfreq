@@ -1,0 +1,5 @@
+Actually, learning common words first makes everyday conversations easier.
+Trade and craft vocabulary appears in news, books, and ordinary speech.
+A noun, a verb, and an adjective can have very different frequencies.
+Word frequency measures usage, while document frequency measures coverage.
+Recent language changes across the web, news, subtitles, and conversation.

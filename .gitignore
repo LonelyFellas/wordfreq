@@ -1,0 +1,14 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+
+# Raw and generated corpora are never committed.
+data/raw/*
+data/processed/*
+data/releases/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/releases/.gitkeep
+
