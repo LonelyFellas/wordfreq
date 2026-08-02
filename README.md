@@ -47,6 +47,49 @@ uv run ruff check .
 
 ## Wikipedia workflow
 
+### One-command reproducible build
+
+The `build` action connects snapshot discovery, verified downloads, parallel extraction,
+disk-backed counting, metadata, and a build manifest:
+
+```bash
+uv run freshfreq wikipedia build \
+  --snapshot 20260701 \
+  --parts all \
+  --connections 4 \
+  --workers 4 \
+  --data-dir data
+```
+
+Preview the selected parts, download size, heuristic extracted size, peak disk estimate, and
+release path without writing files:
+
+```bash
+uv run freshfreq wikipedia build \
+  --snapshot 20260701 \
+  --parts all \
+  --dry-run
+```
+
+The build is resumable at file boundaries. Verified downloads, atomically completed extraction
+outputs, and a frequency CSV with its metadata sidecar are reused. Re-running the same command
+continues from the first incomplete stage. The release directory contains a
+`*.build-manifest.json` whose `stage` moves through downloading, extracting, counting, and
+complete.
+
+By default, the resulting paths are:
+
+```text
+data/raw/wikipedia/<snapshot>/
+data/processed/wikipedia-<snapshot>/
+data/releases/wikipedia-<snapshot>-frequency.csv
+data/releases/wikipedia-<snapshot>-frequency.build-manifest.json
+```
+
+The extracted-size and peak-disk figures are planning estimates, not quotas. Keep additional
+free space because compression ratios and the number of distinct n-grams vary by snapshot and
+configuration.
+
 ### 1. Plan a download
 
 This resolves the latest completed snapshot and prints the selected files without downloading
@@ -236,6 +279,8 @@ A Zipf difference of `1.0` represents an approximate tenfold difference in frequ
 - One dump part is a sample of a snapshot, not the complete English Wikipedia.
 - A complete snapshot requires substantial download, extracted-corpus, temporary database, and
   release storage.
+- Resume currently happens at file and pipeline-stage boundaries; an interrupted extraction part
+  is restarted rather than resumed within the compressed XML stream.
 - Additional domains must be counted independently before a defensible combined score is built.
 
 ## Project structure

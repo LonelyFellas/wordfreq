@@ -10,6 +10,13 @@ from freshfreq.dataset import lookup_csv, metadata_path, read_metadata, result_a
 from freshfreq.external_count import count_documents_to_csv
 from freshfreq.io import open_text
 from freshfreq.sources.wikipedia import download_part, resolve_parts, write_manifest
+from freshfreq.sources.wikipedia_build import (
+    create_build_plan,
+    download_build_parts,
+    extract_build_parts,
+    frequency_build_matches,
+    write_build_manifest,
+)
 from freshfreq.sources.wikipedia_extract import extract_wikipedia, extract_wikipedia_parts
 
 
@@ -64,6 +71,18 @@ def count_command(
     print(f"wrote metadata to {sidecar}")
 
 
+def parse_part_limit(value: str) -> int | None:
+    if value == "all":
+        return None
+    try:
+        limit = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("parts must be 'all' or a positive integer") from error
+    if limit < 1:
+        raise argparse.ArgumentTypeError("parts must be 'all' or a positive integer")
+    return limit
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="freshfreq")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -109,15 +128,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wikipedia_parser.add_argument(
         "action",
-        choices=("plan", "download", "extract"),
-        help="show the plan, fetch selected parts, or extract an existing part",
+        choices=("plan", "download", "extract", "build"),
+        help="plan, download, extract, or run the complete build pipeline",
     )
     wikipedia_parser.add_argument("--snapshot", default="latest", help="latest or YYYYMMDD")
     wikipedia_parser.add_argument(
-        "--parts", type=int, default=1, help="number of article dump parts to select"
+        "--parts",
+        type=parse_part_limit,
+        default=1,
+        help="number of article dump parts, or 'all' (default: 1)",
     )
     wikipedia_parser.add_argument(
-        "--output", type=Path, default=Path("data/raw/wikipedia"), help="download directory"
+        "--output", type=Path, help="output file or directory, depending on the action"
     )
     wikipedia_parser.add_argument(
         "--input",
@@ -133,6 +155,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wikipedia_parser.add_argument(
         "--workers", type=int, default=1, help="parallel extraction workers (default: 1)"
+    )
+    wikipedia_parser.add_argument(
+        "--data-dir", type=Path, default=Path("data"), help="build data root (default: data)"
+    )
+    wikipedia_parser.add_argument(
+        "--work-dir", type=Path, help="temporary counting directory for a complete build"
+    )
+    wikipedia_parser.add_argument(
+        "--max-ngram",
+        type=int,
+        choices=range(1, 4),
+        default=1,
+        metavar="N",
+        help="maximum n-gram size for a complete build (default: 1)",
+    )
+    wikipedia_parser.add_argument(
+        "--chunk-documents",
+        type=int,
+        default=5_000,
+        metavar="N",
+        help="documents per counting chunk in a complete build (default: 5000)",
+    )
+    wikipedia_parser.add_argument(
+        "--dry-run", action="store_true", help="show a complete build plan without writing files"
     )
     return parser
 
@@ -192,6 +238,8 @@ def main() -> None:
                 parser.error("--min-chars must be at least 1")
             if args.workers < 1:
                 parser.error("--workers must be at least 1")
+            if args.output is None:
+                parser.error("wikipedia extract requires --output")
             if len(args.input) == 1 and args.output.suffix == ".gz":
                 result = extract_wikipedia(args.input[0], args.output, args.min_chars)
                 print(f"pages seen: {result.pages_seen:,}")
@@ -216,10 +264,65 @@ def main() -> None:
             print(f"parts extracted: {len(batch.parts):,}")
             print(f"manifest: {batch.manifest_path}")
             return
-        if args.parts < 1:
-            parser.error("--parts must be at least 1")
         if args.connections < 1 or args.connections > 8:
             parser.error("--connections must be between 1 and 8")
+        if args.workers < 1:
+            parser.error("--workers must be at least 1")
+        if args.chunk_documents < 1:
+            parser.error("--chunk-documents must be at least 1")
+        if args.action == "build":
+            plan = create_build_plan(
+                args.snapshot,
+                args.parts,
+                args.data_dir,
+                output_path=args.output,
+                work_dir=args.work_dir,
+            )
+            print(f"snapshot: {plan.snapshot}")
+            print(f"parts: {len(plan.parts):,}")
+            print(f"download: {plan.download_bytes / 1_000_000_000:.2f} GB")
+            print(
+                "estimated extracted: "
+                f"{plan.estimated_extracted_bytes / 1_000_000_000:.2f} GB"
+            )
+            print(f"estimated peak disk: {plan.estimated_peak_bytes / 1_000_000_000:.2f} GB")
+            print(f"release: {plan.output_path}")
+            if args.dry_run:
+                print("dry run: no files written")
+                return
+
+            write_build_manifest(plan, stage="downloading", downloaded=[], extracted=[])
+            downloaded = download_build_parts(plan, args.connections)
+            write_build_manifest(
+                plan, stage="extracting", downloaded=downloaded, extracted=[]
+            )
+            extracted = extract_build_parts(
+                plan,
+                downloaded,
+                min_chars=args.min_chars,
+                workers=args.workers,
+            )
+            write_build_manifest(
+                plan, stage="counting", downloaded=downloaded, extracted=extracted
+            )
+            if frequency_build_matches(plan, extracted, args.max_ngram):
+                print(f"frequency dataset already complete: {plan.output_path}")
+            else:
+                count_command(
+                    extracted,
+                    plan.output_path,
+                    "wikipedia",
+                    plan.snapshot,
+                    args.max_ngram,
+                    args.chunk_documents,
+                    plan.work_dir,
+                )
+            manifest = write_build_manifest(
+                plan, stage="complete", downloaded=downloaded, extracted=extracted
+            )
+            print(f"build complete: {plan.output_path}")
+            print(f"build manifest: {manifest}")
+            return
         snapshot, parts = resolve_parts(args.snapshot, args.parts)
         total_size = sum(part.size for part in parts)
         print(f"snapshot: {snapshot}")
@@ -228,7 +331,7 @@ def main() -> None:
         for part in parts:
             print(f"- {part.filename} ({part.size / 1_000_000:.1f} MB)")
         if args.action == "download":
-            target_dir = args.output / snapshot
+            target_dir = (args.output or Path("data/raw/wikipedia")) / snapshot
             manifest = write_manifest(target_dir, snapshot, parts)
             print(f"manifest: {manifest}")
             for index, part in enumerate(parts, start=1):
