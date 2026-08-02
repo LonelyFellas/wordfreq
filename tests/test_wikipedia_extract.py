@@ -31,7 +31,10 @@ def test_clean_wikitext_removes_links_and_formatting() -> None:
 
 
 def test_clean_wikitext_removes_file_and_category_links() -> None:
-    source = "Before [[File:Map.png|thumb|A noisy caption]] after [[Category:Examples]]"
+    source = (
+        "Before {{box|[[File:Map.png|thumb|A noisy caption]]}} "
+        "after [[Category:Examples]]"
+    )
     assert clean_wikitext(source) == "Before after"
 
 

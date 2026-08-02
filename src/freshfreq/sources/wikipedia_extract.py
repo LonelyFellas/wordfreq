@@ -35,7 +35,8 @@ def clean_wikitext(source: str) -> str:
     for link in parsed.filter_wikilinks(recursive=True):
         title = str(link.title).strip().casefold()
         if title.startswith(("file:", "image:", "category:")):
-            parsed.remove(link, recursive=True)
+            link.title = ""
+            link.text = ""
     plain = parsed.strip_code(normalize=True, collapse=True)
     return WHITESPACE_PATTERN.sub(" ", plain).strip()
 

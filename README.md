@@ -1,42 +1,87 @@
 # freshfreq
 
-一个面向现代英语词频的可复现统计项目。项目按数据源和时间段分别保存统计结果，避免把
-Wikipedia、网页、新闻和口语语料直接混为一个不可解释的数字。
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-当前 v0.1 骨架支持：
+`freshfreq` is a reproducible, source-aware pipeline for building and querying modern English
+word-frequency datasets.
 
-- Unicode 归一化和英文 token 提取；
-- 统计出现次数和文档覆盖数；
-- 计算每百万词频率和 Zipf 值；
-- 从纯文本文件生成 CSV 统计结果；
-- 使用版本化 JSON 配置描述数据集。
-- 发现最新英文 Wikipedia 快照并生成分块下载计划；
-- 显式下载选定分块，支持断点续传、大小与 SHA-1 校验。
+It keeps corpus domains and time periods separate instead of mixing Wikipedia, web, news, and
+spoken language into a single unexplained score. The current release implements an end-to-end
+English Wikipedia pipeline.
 
-## 开始使用
+## Features
+
+- Discover completed English Wikipedia snapshots.
+- Plan and download selected multistream dump parts.
+- Resume interrupted downloads and verify file size and SHA-1.
+- Stream `.xml.bz2` files without loading an entire dump into memory.
+- Keep main-namespace articles and filter redirects, non-articles, and short pages.
+- Remove MediaWiki formatting, image links, and category links.
+- Write one cleaned document per line in a gzip-compressed corpus.
+- Count surface-form occurrences and cross-document frequency.
+- Calculate frequency per million tokens and Zipf frequency.
+- Produce a versioned JSON metadata sidecar for every frequency CSV.
+- Query a word in text or JSON format.
+
+## Requirements
+
+- Python 3.11 or later
+- [`uv`](https://docs.astral.sh/uv/)
+- Enough disk space for the selected Wikimedia dump parts and extracted text
+
+## Installation
 
 ```bash
 uv sync
 uv run freshfreq --help
-uv run pytest
 ```
 
-查看最新 Wikipedia 快照和第一个数据分块，不会下载文件：
+Run the quality checks:
+
+```bash
+uv run pytest
+uv run ruff check .
+```
+
+## Wikipedia workflow
+
+### 1. Plan a download
+
+This resolves the latest completed snapshot and prints the selected files without downloading
+them:
 
 ```bash
 uv run freshfreq wikipedia plan --snapshot latest --parts 1
 ```
 
-确认计划后下载一个分块。文件拆为八段，默认保持四条并行连接，分段均可断点续传：
+Use an explicit snapshot for a reproducible build:
 
 ```bash
-uv run freshfreq wikipedia download --snapshot latest --parts 1
+uv run freshfreq wikipedia plan --snapshot 20260701 --parts 1
 ```
 
-Wikipedia 英文 dump 的单个分块通常仍有数百 MB。下载操作会写入
-`data/raw/wikipedia/<snapshot>/`，并生成包含 URL、文件大小和 SHA-1 的 manifest。
+### 2. Download dump parts
 
-将下载的 XML 分块提取为压缩的逐行文档语料：
+```bash
+uv run freshfreq wikipedia download \
+  --snapshot 20260701 \
+  --parts 1 \
+  --connections 4
+```
+
+Each file is split into eight byte ranges. Up to four ranges are downloaded concurrently by
+default. Partial ranges are retained for a later resume. Completed files are checked against the
+size and SHA-1 published by Wikimedia.
+
+Downloads are stored under:
+
+```text
+data/raw/wikipedia/<snapshot>/
+```
+
+The directory also contains `manifest.json` with the source URL, size, checksum, and snapshot.
+
+### 3. Extract clean article text
 
 ```bash
 uv run freshfreq wikipedia extract \
@@ -44,46 +89,105 @@ uv run freshfreq wikipedia extract \
   --output data/processed/wikipedia-20260701-part1.txt.gz
 ```
 
-提取过程采用流式 XML 解析，只保留主命名空间文章，过滤重定向和过短内容。随后可以直接
-统计压缩语料，无需先解压到磁盘：
+The output is UTF-8 text compressed with gzip. Each physical line represents one independent
+Wikipedia article, allowing document frequency to be calculated correctly.
+
+### 4. Build a frequency dataset
 
 ```bash
-uv run freshfreq count data/processed/wikipedia-20260701-part1.txt.gz \
-  --output data/processed/wikipedia-20260701-part1-frequency.csv
+uv run freshfreq count \
+  data/processed/wikipedia-20260701-part1.txt.gz \
+  --output data/processed/wikipedia-20260701-part1-frequency.csv \
+  --source wikipedia \
+  --snapshot 20260701
 ```
 
-运行项目自带的示例（每行视为一篇独立文档）：
+This produces two files:
 
-```bash
-uv run freshfreq count examples/sample.txt --output data/processed/sample.csv
+```text
+wikipedia-20260701-part1-frequency.csv
+wikipedia-20260701-part1-frequency.csv.metadata.json
 ```
 
-查看结果：
-
-```bash
-column -s, -t data/processed/sample.csv
-```
-
-统计自己的语料时，将 `examples/sample.txt` 换成真实文件路径。输入必须是 UTF-8 文本，
-每行代表一篇独立文档；只有这样才能正确计算 `document_frequency`。
-
-输出字段：
+CSV columns:
 
 ```text
 term,occurrence_count,document_frequency,frequency_per_million,zipf_frequency
 ```
 
-## 目录
+The metadata sidecar records the source, snapshot, generation time, document count, token count,
+term count, frequency unit, and Zipf definition.
 
-```text
-configs/          数据集和构建版本配置
-data/raw/         原始语料，不提交 Git
-data/processed/   中间统计，不提交 Git
-data/releases/    最终发布数据，不提交 Git
-src/freshfreq/    归一化、分词、统计、导出和 CLI
-tests/            自动化测试
-examples/         可直接运行的微型示例语料
+### 5. Query a word
+
+```bash
+uv run freshfreq lookup actually \
+  --dataset data/processed/wikipedia-20260701-part1-frequency.csv
 ```
 
-后续数据源应分别构建，例如 `wikipedia`、`common_crawl`、`news` 和 `spoken`。聚合之前
-必须保留来源、时间范围、总 token 数和总文档数。
+Machine-readable output:
+
+```bash
+uv run freshfreq lookup actually \
+  --dataset data/processed/wikipedia-20260701-part1-frequency.csv \
+  --json
+```
+
+## Count a custom corpus
+
+Input must be UTF-8 text with one document per line:
+
+```bash
+uv run freshfreq count examples/sample.txt \
+  --output data/processed/sample-frequency.csv \
+  --source custom
+```
+
+## Metrics
+
+`occurrence_count` is the number of times a surface form occurs. `document_frequency` is the
+number of independent documents containing it at least once.
+
+Frequency per million tokens is:
+
+```text
+occurrence_count / total_token_count * 1,000,000
+```
+
+Zipf frequency is:
+
+```text
+log10(occurrences per billion tokens)
+```
+
+A Zipf difference of `1.0` represents an approximate tenfold difference in frequency.
+
+## Current limitations
+
+- Only English surface forms are counted; inflections are not merged into lemmas.
+- The published CSV format currently contains unigrams only.
+- Phrase lookup is rejected instead of being estimated from component words.
+- Wikipedia represents encyclopedic written English, not everyday spoken English.
+- One dump part is a sample of a snapshot, not the complete English Wikipedia.
+- Additional domains must be counted independently before a defensible combined score is built.
+
+## Project structure
+
+```text
+configs/          Dataset and release configurations
+data/raw/         Downloaded source corpora; ignored by Git
+data/processed/   Extracted corpora and statistics; ignored by Git
+data/releases/    Publishable release artifacts; ignored by Git
+examples/         Small local examples
+src/freshfreq/    CLI, source adapters, extraction, tokenization, and statistics
+tests/            Automated tests
+```
+
+## Data and licensing
+
+The project code and generated data are separate licensing concerns. Before publishing a dataset,
+review every upstream source's attribution, redistribution, and derived-statistics terms. Raw
+corpora and generated artifacts are intentionally excluded from Git.
+
+Do not describe a Wikipedia-only result as general or spoken-English frequency. Always expose the
+source, snapshot, corpus size, and methodology with the result.
