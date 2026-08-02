@@ -10,6 +10,8 @@ Wikipedia、网页、新闻和口语语料直接混为一个不可解释的数�
 - 计算每百万词频率和 Zipf 值；
 - 从纯文本文件生成 CSV 统计结果；
 - 使用版本化 JSON 配置描述数据集。
+- 发现最新英文 Wikipedia 快照并生成分块下载计划；
+- 显式下载选定分块，支持断点续传、大小与 SHA-1 校验。
 
 ## 开始使用
 
@@ -17,6 +19,37 @@ Wikipedia、网页、新闻和口语语料直接混为一个不可解释的数�
 uv sync
 uv run freshfreq --help
 uv run pytest
+```
+
+查看最新 Wikipedia 快照和第一个数据分块，不会下载文件：
+
+```bash
+uv run freshfreq wikipedia plan --snapshot latest --parts 1
+```
+
+确认计划后下载一个分块。文件拆为八段，默认保持四条并行连接，分段均可断点续传：
+
+```bash
+uv run freshfreq wikipedia download --snapshot latest --parts 1
+```
+
+Wikipedia 英文 dump 的单个分块通常仍有数百 MB。下载操作会写入
+`data/raw/wikipedia/<snapshot>/`，并生成包含 URL、文件大小和 SHA-1 的 manifest。
+
+将下载的 XML 分块提取为压缩的逐行文档语料：
+
+```bash
+uv run freshfreq wikipedia extract \
+  --input data/raw/wikipedia/20260701/enwiki-20260701-pages-articles-multistream1.xml-p1p41242.bz2 \
+  --output data/processed/wikipedia-20260701-part1.txt.gz
+```
+
+提取过程采用流式 XML 解析，只保留主命名空间文章，过滤重定向和过短内容。随后可以直接
+统计压缩语料，无需先解压到磁盘：
+
+```bash
+uv run freshfreq count data/processed/wikipedia-20260701-part1.txt.gz \
+  --output data/processed/wikipedia-20260701-part1-frequency.csv
 ```
 
 运行项目自带的示例（每行视为一篇独立文档）：
