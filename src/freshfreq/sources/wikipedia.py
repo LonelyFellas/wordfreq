@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import re
 import shutil
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -13,6 +16,8 @@ from typing import Any
 BASE_URL = "https://dumps.wikimedia.org/enwiki"
 SNAPSHOT_PATTERN = re.compile(r'href="(\d{8})/"')
 ARTICLE_PART_PATTERN = re.compile(r"pages-articles-multistream\d+\.xml-p\d+p\d+\.bz2$")
+RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
+MAX_DOWNLOAD_ATTEMPTS = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,32 +104,74 @@ def split_ranges(size: int, connections: int) -> list[tuple[int, int]]:
     ]
 
 
+def _retry_delay(error: Exception, attempt: int) -> float:
+    if isinstance(error, urllib.error.HTTPError):
+        retry_after = error.headers.get("Retry-After")
+        if retry_after and retry_after.isdigit():
+            return min(max(float(retry_after), 1.0), 300.0)
+    return min(5.0 * 2**attempt, 300.0) + random.uniform(0.0, 1.0)
+
+
+def _is_retryable(error: Exception) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in RETRYABLE_HTTP_CODES
+    return isinstance(error, (urllib.error.URLError, TimeoutError, OSError))
+
+
 def _download_range(part: DumpPart, path: Path, start: int, end: int) -> None:
     expected_size = end - start + 1
-    existing_size = path.stat().st_size if path.exists() else 0
-    if existing_size == expected_size:
-        return
-    if existing_size > expected_size:
-        path.unlink()
-        existing_size = 0
+    for attempt in range(MAX_DOWNLOAD_ATTEMPTS):
+        existing_size = path.stat().st_size if path.exists() else 0
+        if existing_size == expected_size:
+            return
+        if existing_size > expected_size:
+            path.unlink()
+            existing_size = 0
 
-    request = urllib.request.Request(
-        part.url,
-        headers={
-            "User-Agent": "freshfreq/0.1",
-            "Range": f"bytes={start + existing_size}-{end}",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        if response.status != 206:
-            raise RuntimeError(f"server did not honor range request for {part.filename}")
-        with path.open("ab" if existing_size else "wb") as output:
-            shutil.copyfileobj(response, output, length=1024 * 1024)
-    if path.stat().st_size != expected_size:
-        raise RuntimeError(
-            f"range size mismatch for {part.filename}: expected {expected_size}, "
-            f"got {path.stat().st_size}"
+        request = urllib.request.Request(
+            part.url,
+            headers={
+                "User-Agent": "freshfreq/0.1",
+                "Range": f"bytes={start + existing_size}-{end}",
+            },
         )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                if response.status != 206:
+                    raise RuntimeError(
+                        f"server did not honor range request for {part.filename}"
+                    )
+                with path.open("ab" if existing_size else "wb") as output:
+                    shutil.copyfileobj(response, output, length=1024 * 1024)
+        except Exception as error:
+            if not _is_retryable(error) or attempt == MAX_DOWNLOAD_ATTEMPTS - 1:
+                raise
+            delay = _retry_delay(error, attempt)
+            print(
+                f"retrying {part.filename} range after {type(error).__name__} "
+                f"in {delay:.1f}s (attempt {attempt + 2}/{MAX_DOWNLOAD_ATTEMPTS})",
+                flush=True,
+            )
+            time.sleep(delay)
+            continue
+
+        actual_size = path.stat().st_size
+        if actual_size == expected_size:
+            return
+        error = OSError(
+            f"incomplete range for {part.filename}: expected {expected_size}, got {actual_size}"
+        )
+        if attempt == MAX_DOWNLOAD_ATTEMPTS - 1:
+            raise error
+        delay = _retry_delay(error, attempt)
+        print(
+            f"retrying incomplete range for {part.filename} in {delay:.1f}s "
+            f"(attempt {attempt + 2}/{MAX_DOWNLOAD_ATTEMPTS})",
+            flush=True,
+        )
+        time.sleep(delay)
+
+    raise RuntimeError(f"download attempts exhausted for {part.filename}")
 
 
 def download_part(part: DumpPart, destination: Path, connections: int = 4) -> Path:
